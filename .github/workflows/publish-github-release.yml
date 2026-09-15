@@ -1,0 +1,61 @@
+name: publish github release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing git tag to publish
+        required: true
+        default: v0.18.0-reconstructed.1
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-github-release.yml"
+      - ".github/release-notes/**"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.inputs.tag || 'v0.18.0-reconstructed.1' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Verify official installer hashes
+        run: |
+          echo "a253ccd8aab01e083f9812a0264354c5034d8ba7f0610bbb557e82ae77d203eb  research-archives/original/0.18.0/macos-arm64/Grok_Bot_0.18.0.dmg" | sha256sum -c
+          echo "464079a15ef5fa8b61ccea8fffcc78f63cfcf6df65fb0ad5e725d8b95f7e437e  research-archives/original/0.18.0/windows-x64/Grok_Bot_0.18.0_Setup.exe" | sha256sum -c
+
+      - name: Publish or update GitHub Release
+        run: |
+          set -eu
+          dmg='research-archives/original/0.18.0/macos-arm64/Grok_Bot_0.18.0.dmg'
+          exe='research-archives/original/0.18.0/windows-x64/Grok_Bot_0.18.0_Setup.exe'
+          notes=".github/release-notes/${TAG}.md"
+          title='v0.18.0-reconstructed.1 — TCD + official 0.18 installers'
+          test -f "$notes"
+          test -f "$dmg"
+          test -f "$exe"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              "${dmg}#Grok Bot 0.18.0 macOS arm64 (official)" \
+              "${exe}#Grok Bot 0.18.0 Windows x64 (official)" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$title" \
+              --notes-file "$notes" \
+              "${dmg}#Grok Bot 0.18.0 macOS arm64 (official)" \
+              "${exe}#Grok Bot 0.18.0 Windows x64 (official)"
+          fi
