@@ -164,6 +164,8 @@ async function localAuthMountArguments(): Promise<string[]> {
 
 async function ensureLocalDockerBox(settingsPath: string, inferenceCredential?: InferenceCredential): Promise<GatewayConnection> {
   const token = await readOrCreateToken(settingsPath);
+  // If Computer gateway is already reachable on loopback (e.g. SSH tunnel to mason1), skip local Docker.
+  if (await gatewayReady(token)) return { baseUrl: LOCAL_DOCKER_GATEWAY_URL, token };
   const hostBundle = await stageCurrentHostBundle(settingsPath);
   const inferenceFile = inferenceCredential == null ? undefined : await persistInferenceCredential(settingsPath, inferenceCredential);
   const daemon = await runDocker(["info", "--format", "{{.ServerVersion}}"]).catch(() => ({ ok: false, output: "Docker is not installed." }));

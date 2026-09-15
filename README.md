@@ -76,6 +76,26 @@ Research copies of the exact 0.18.0 installers live under
 See [research-archives/README.md](research-archives/README.md) for source URLs,
 sizes, verification commands, and the machine-readable artifact manifest.
 
+## grok-bot-tcd 私有部署文档（Mason / 运营）
+
+本仓库同时承载 **Intel Mac + mason1 自建 Computer + ChainFuel** 的部署与排障文档。入口：
+
+| 文档 | 说明 |
+| --- | --- |
+| [docs/INDEX.md](docs/INDEX.md) | 文档索引 |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | **当前进度看板**（先读） |
+| [docs/GROK-BOT-TCD-运营手册.md](docs/GROK-BOT-TCD-运营手册.md) | 为什么做、架构、步骤、QA |
+| [docs/BROWSER-EGRESS-AND-CLASH.md](docs/BROWSER-EGRESS-AND-CLASH.md) | 浏览器出站与 mason1 Clash |
+| [docs/WEBSEARCH-AUTH-ROOT-CAUSE.md](docs/WEBSEARCH-AUTH-ROOT-CAUSE.md) | WebSearch 黄三角根因 |
+| [cases/](cases/) | 案例与截图证据 |
+| [scripts/launch-mason1-computer.sh](scripts/launch-mason1-computer.sh) | 一键隧道 + 启动 |
+
+日常启动：
+
+```bash
+./scripts/launch-mason1-computer.sh
+```
+
 ## Current features
 
 ### Inference Router

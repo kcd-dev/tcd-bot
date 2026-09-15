@@ -15,3 +15,17 @@ Small manifests remain checked in only where the build consumes them directly.
 Large recovery reports, source capsules, rejected candidate evidence, and
 screenshots live only in the private forensic history and are not part of this
 branch's product tree.
+
+## Control platforms
+
+The control plane has three execution platforms:
+
+- **Mac client**: command entry point and future desktop UI.
+- **Windows server**: `computer-worker.mjs`, receiving Windows tasks through
+  `grokbot.computer.control`.
+- **Android device**: `worker.mjs`, receiving phone tasks through
+  `grokbot.phone.control` and executing them through ADB.
+
+The currently connected Android device is a Xiaomi Mi 9 Transparent Edition,
+serial `4677a559`, Android 11. Set `ADB_SERIAL=4677a559` when more than one
+device may be attached.

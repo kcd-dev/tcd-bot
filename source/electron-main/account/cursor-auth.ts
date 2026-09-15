@@ -15,6 +15,11 @@ import { deleteSecret, isEncryptedStorageAvailable, readSecret, waitForEncrypted
 import { reportSessionEvent, type SessionRefreshFailure, type SessionSignoutCause } from "./session-funnel-telemetry.js";
 import { reportSigninLogin, reportSigninSignout, signinSignoutCause } from "./signin-funnel-telemetry.js";
 import { resolveAuthRedirectTarget } from "../auth/auth-callback-registration.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { getSandRootDir } from "../../host/host-paths.js";
+import { SandSettingsStore } from "../../shared/node/settings/sand-settings-store.js";
+import { LOCAL_INFERENCE_AUTH_STATUS, LOCAL_INFERENCE_PEEK_TOKEN, shouldBypassCursorSignIn } from "../../shared/node/local-inference-session.js";
 
 export const ACCESS_TOKEN_SECRET_KEY = "cursor-access-token";
 export const REFRESH_TOKEN_SECRET_KEY = "cursor-refresh-token";
@@ -180,6 +185,7 @@ export interface SandCursorAuthServiceOptions {
   readonly reportFailure?: (operation: string, error: unknown) => void;
   readonly now?: () => number;
   readonly getBackendUrl?: () => string;
+  readonly getInferenceProvider?: () => string | undefined;
 }
 
 const defaultSecrets: CursorSecretStore = {
@@ -212,6 +218,32 @@ export class SandCursorAuthService {
   private get credentialsRetainedAfterFailedLogout(): boolean { return this.credentialState === "retained-after-failed-logout"; }
   private advanceAuthOperationEpoch(): number { return ++this.authOperationEpoch; }
   private isCurrentAuthOperation(epoch: number): boolean { return epoch === this.authOperationEpoch; }
+  private bypassCursorSignIn(): boolean {
+    if (shouldBypassCursorSignIn(this.options.getInferenceProvider?.(), process.env)) return true;
+    try {
+      return shouldBypassCursorSignIn(new SandSettingsStore(join(getSandRootDir(), "settings.json")).getInferenceProvider(), process.env);
+    } catch {
+      return false;
+    }
+  }
+  private localProfilePath(): string {
+    return join(getSandRootDir(), "local-profile.json");
+  }
+  private readLocalDisplayName(): string | undefined {
+    try {
+      const parsed = JSON.parse(readFileSync(this.localProfilePath(), "utf8")) as { displayName?: unknown };
+      return typeof parsed.displayName === "string" && parsed.displayName.trim().length > 0 ? parsed.displayName.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  private writeLocalDisplayName(name: string): void {
+    writeFileSync(this.localProfilePath(), `${JSON.stringify({ displayName: name }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  }
+  private localInferenceStatus(): SandAuthStatus {
+    const displayName = this.readLocalDisplayName() ?? LOCAL_INFERENCE_AUTH_STATUS.displayName;
+    return { ...LOCAL_INFERENCE_AUTH_STATUS, displayName };
+  }
   private assertCurrentAuthOperation(epoch: number): void { if (!this.isCurrentAuthOperation(epoch)) throw new SandAuthOperationSupersededError(); }
   private async mutateCredentials<T>(mutation: () => T | Promise<T>): Promise<T> {
     const result = this.credentialMutationTail.then(mutation);
@@ -241,9 +273,24 @@ export class SandCursorAuthService {
     if (this.credentialsRevoked) return this.reportedLoggedOutStatus;
     const [accessToken, refreshToken] = await Promise.all([this.secrets.readSecret(ACCESS_TOKEN_SECRET_KEY), this.secrets.readSecret(REFRESH_TOKEN_SECRET_KEY)]);
     if (this.credentialsRetainedAfterFailedLogout) return RETAINED_AFTER_FAILED_LOGOUT_STATUS;
-    if (this.credentialsRevoked || accessToken == null || refreshToken == null) return this.credentialsRevoked ? this.reportedLoggedOutStatus : LOGGED_OUT_STATUS;
+    if (this.credentialsRevoked || accessToken == null || refreshToken == null) {
+      if (this.bypassCursorSignIn()) return this.localInferenceStatus();
+      return this.credentialsRevoked ? this.reportedLoggedOutStatus : LOGGED_OUT_STATUS;
+    }
     const status = createLoggedInStatus(accessToken);
-    if (status.kind === "logged-in" && status.authId != null) await this.ensureProfile(status.authId, operationEpoch);
+    if (status.kind === "logged-in" && status.authId != null) {
+      const localName = this.readLocalDisplayName();
+      if (localName !== undefined) {
+        const cached = this.profileCache.get(status.authId);
+        this.profileCache.set(status.authId, {
+          ...(cached?.email ?? status.email) == null ? {} : { email: cached?.email ?? status.email },
+          ...(cached?.profilePictureUrl == null ? {} : { profilePictureUrl: cached.profilePictureUrl }),
+          isAnysphereUser: cached?.isAnysphereUser ?? false,
+          displayName: localName,
+        });
+      }
+      await this.ensureProfile(status.authId, operationEpoch);
+    }
     if (this.credentialUseRevoked || !this.isCurrentAuthOperation(operationEpoch)) return await this.getStatus();
     return this.withProfile(status);
   }
@@ -256,7 +303,9 @@ export class SandCursorAuthService {
   async updateDisplayName(rawName: string): Promise<SandAuthStatus> {
     const status = await this.getStatus(); if (status.kind !== "logged-in" || status.authId == null) return status;
     if (this.options.updateProfileName == null) throw new Error("updateDisplayName requires the wiring-injected profile-name writer.");
-    const name = rawName.replace(/\s+/g, " ").trim(); await this.options.updateProfileName((options) => this.getValidAccessToken(options), name);
+    const name = rawName.replace(/\s+/g, " ").trim();
+    if (this.bypassCursorSignIn()) this.writeLocalDisplayName(name);
+    else await this.options.updateProfileName((options) => this.getValidAccessToken(options), name);
     const cached = this.profileCache.get(status.authId);
     this.profileCache.set(status.authId, { ...(cached?.email ?? status.email) == null ? {} : { email: cached?.email ?? status.email }, ...(cached?.profilePictureUrl == null ? {} : { profilePictureUrl: cached.profilePictureUrl }), isAnysphereUser: cached?.isAnysphereUser ?? false, ...(name.length === 0 ? {} : { displayName: name }) });
     const next = await this.getStatus(); this.emitStatus(next); return next;
@@ -281,7 +330,12 @@ export class SandCursorAuthService {
     if (!this.isCurrentAuthOperation(operationEpoch) || this.credentialUseRevoked || accessToken == null || refreshToken == null) throw new SandAuthSignInRequiredError();
     return shouldRefreshAccessToken(backendUrl, accessToken) ? await this.refreshAccessToken({ backendUrl, operationEpoch, refreshToken }) : accessToken;
   }
-  async peekAccessToken(): Promise<string | null> { if (this.credentialUseRevoked) return null; const [access, refresh] = await Promise.all([this.secrets.readSecret(ACCESS_TOKEN_SECRET_KEY), this.secrets.readSecret(REFRESH_TOKEN_SECRET_KEY)]); return this.credentialUseRevoked || access == null || refresh == null ? null : access; }
+  async peekAccessToken(): Promise<string | null> {
+    if (this.credentialUseRevoked) return this.bypassCursorSignIn() ? LOCAL_INFERENCE_PEEK_TOKEN : null;
+    const [access, refresh] = await Promise.all([this.secrets.readSecret(ACCESS_TOKEN_SECRET_KEY), this.secrets.readSecret(REFRESH_TOKEN_SECRET_KEY)]);
+    if (!this.credentialUseRevoked && access != null && refresh != null) return access;
+    return this.bypassCursorSignIn() ? LOCAL_INFERENCE_PEEK_TOKEN : null;
+  }
   async exportTokens(): Promise<CursorTokens | null> { if (this.credentialUseRevoked) return null; const [accessToken, refreshToken] = await Promise.all([this.secrets.readSecret(ACCESS_TOKEN_SECRET_KEY), this.secrets.readSecret(REFRESH_TOKEN_SECRET_KEY)]); return this.credentialUseRevoked || accessToken == null || refreshToken == null ? null : { accessToken, refreshToken }; }
   async login(): Promise<SandAuthStatus> {
     this.abortActiveLogin(); const operationEpoch = this.advanceAuthOperationEpoch(); const controller = new AbortController(); this.loginAbortController = controller;

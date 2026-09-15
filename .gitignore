@@ -9,6 +9,8 @@ node_modules/
 /work/
 .DS_Store
 *.log
+/todo.md
+todo.md
 
 # Machine-local harness and inspection scratch.
 /.tmp*/

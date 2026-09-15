@@ -1,6 +1,7 @@
 import type { HostExtensionContext } from "../../../internal/host-extensions.js";
 import type { SandAgentModelSelection } from "../../../shared/agents/sand-agent-model.js";
 import { createCursorWebFetchService, createCursorWebSearchService } from "./cursor-web-tools.js";
+import { createLocalWebFetchService, createLocalWebSearchService, shouldUseLocalWebTools } from "./local-web-tools.js";
 import { createHostInference } from "./inference-service.js";
 import type { InferenceExtensionContext } from "./extension.js";
 
@@ -24,6 +25,9 @@ export function createInferenceProductionExtras(
     },
     createWebSearch(args) {
       const request = args as { modelId: string; onRequestId?: (requestId: string) => void };
+      if (shouldUseLocalWebTools(context.deps.settings.getInferenceProvider())) {
+        return createLocalWebSearchService();
+      }
       return createCursorWebSearchService({
         getAccessToken: auth.getAccessToken,
         getMachineId: auth.getMachineId,
@@ -33,6 +37,9 @@ export function createInferenceProductionExtras(
     },
     createWebFetch(args) {
       const request = args as { onRequestId?: (requestId: string) => void };
+      if (shouldUseLocalWebTools(context.deps.settings.getInferenceProvider())) {
+        return createLocalWebFetchService();
+      }
       return createCursorWebFetchService({
         getAccessToken: auth.getAccessToken,
         getMachineId: auth.getMachineId,
